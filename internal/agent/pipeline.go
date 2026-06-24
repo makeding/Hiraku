@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"sync"
+	"time"
 
 	"github.com/makeding/hiraku/internal/config"
 )
@@ -68,7 +69,14 @@ func (c *Consumer) CopyTo(w io.Writer) error {
 }
 
 func (c *Consumer) Release() {
+	c.ReleaseAfter(0)
+}
+
+func (c *Consumer) ReleaseAfter(delay time.Duration) {
 	c.once.Do(func() {
+		if delay > 0 {
+			time.Sleep(delay)
+		}
 		c.pipeline.stop()
 	})
 }

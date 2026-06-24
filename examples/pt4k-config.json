@@ -1,6 +1,7 @@
 {
   "listen": "0.0.0.0:40773",
   "secret": "change-me",
+  "disconnectCloseDelaySeconds": 2,
   "allowIPv4CidrRanges": [
     "10.0.0.0/8",
     "127.0.0.0/8",
@@ -8,15 +9,21 @@
     "192.168.0.0/16"
   ],
   "modes": {
-    "BSCS": {
+    "BSCS1: {
       "record": [
         ["recdvb", "--dev", "0", "--strip", "--b25", "<channel>", "-", "-"]
       ]
     },
-    "BS4K": {
+    "BS4K1": {
+      "record": [["recdvb4k", "--dev", "0", "--b61", "<channel>", "-", "-"]]
+    },
+    "BSCS2": {
       "record": [
-        ["recdvb4k", "--dev", "0", "--acas", "<channel>", "-", "-"]
+        ["recdvb", "--dev", "0", "--strip", "--b25", "<channel>", "-", "-"]
       ]
+    },
+    "BS4K2": {
+      "record": [["recdvb4k", "--dev", "0", "--b61", "<channel>", "-", "-"]]
     }
   }
 }

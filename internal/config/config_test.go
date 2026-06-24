@@ -78,6 +78,21 @@ func TestLoadRejectsInvalidAllowIPv4CidrRanges(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsNegativeDisconnectCloseDelay(t *testing.T) {
+	_, err := loadConfigJSON(t, `{
+		"secret": "secret",
+		"disconnectCloseDelaySeconds": -1,
+		"modes": {
+			"BSCS": {
+				"record": [["recdvb", "<channel>"]]
+			}
+		}
+	}`)
+	if err == nil {
+		t.Fatal("expected negative disconnectCloseDelaySeconds to be rejected")
+	}
+}
+
 func TestAllowsRemoteAddr(t *testing.T) {
 	cfg := Config{
 		AllowIPv4CidrRanges: []string{"10.0.0.0/8", "192.168.0.0/16"},

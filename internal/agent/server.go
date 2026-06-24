@@ -7,6 +7,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"time"
 
 	"github.com/makeding/hiraku/internal/config"
 	"github.com/makeding/hiraku/internal/protocol"
@@ -79,7 +80,7 @@ func (s *Server) handle(conn net.Conn) {
 	}
 
 	_ = consumer.CopyTo(conn)
-	consumer.Release()
+	consumer.ReleaseAfter(time.Duration(s.cfg.DisconnectCloseDelaySeconds) * time.Second)
 }
 
 func (s *Server) writeError(w io.Writer, err error) {

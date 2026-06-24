@@ -33,10 +33,12 @@ The client can only request `mode` and `channel`. `mode` is the identity of a lo
 
 `allowIPv4CidrRanges` restricts client source addresses before request authentication, using the same IPv4 CIDR allow-list style as Mirakurun. When omitted, it defaults to `10.0.0.0/8`, `127.0.0.0/8`, `172.16.0.0/12`, and `192.168.0.0/16`.
 
+`disconnectCloseDelaySeconds` delays stopping the local command pipeline after the client TCP connection ends. When omitted, it defaults to `0`, which keeps the old immediate-stop behavior.
+
 Pipelines are arrays of argv arrays. They are executed without a shell, and stdout of each step is piped to stdin of the next step.
 
 ## Lifecycle
 
 - Each client request starts its own pipeline from the selected mode template.
-- When the client disconnects, that pipeline is stopped.
+- When the client disconnects, that pipeline is stopped after `disconnectCloseDelaySeconds`.
 - There is no shared decode session, fanout, idle handoff, or byte buffering.

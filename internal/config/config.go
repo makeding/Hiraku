@@ -12,10 +12,11 @@ import (
 )
 
 type Config struct {
-	Listen              string          `json:"listen"`
-	Secret              string          `json:"secret"`
-	AllowIPv4CidrRanges []string        `json:"allowIPv4CidrRanges"`
-	Modes               map[string]Mode `json:"modes"`
+	Listen                      string          `json:"listen"`
+	Secret                      string          `json:"secret"`
+	AllowIPv4CidrRanges         []string        `json:"allowIPv4CidrRanges"`
+	DisconnectCloseDelaySeconds int             `json:"disconnectCloseDelaySeconds"`
+	Modes                       map[string]Mode `json:"modes"`
 }
 
 type Mode struct {
@@ -40,6 +41,9 @@ func Load(path string) (Config, error) {
 	}
 	if cfg.Secret == "" {
 		return Config{}, errors.New("secret is required")
+	}
+	if cfg.DisconnectCloseDelaySeconds < 0 {
+		return Config{}, errors.New("disconnectCloseDelaySeconds must be greater than or equal to 0")
 	}
 	for _, cidr := range cfg.AllowIPv4CidrRanges {
 		prefix, err := netip.ParsePrefix(cidr)

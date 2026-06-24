@@ -57,6 +57,38 @@ func TestReleaseStopsPipeline(t *testing.T) {
 	waitFor(t, time.Second, p.isStopped)
 }
 
+func TestReleaseAfterDelaysPipelineStop(t *testing.T) {
+	m := NewManager(testConfig())
+
+	c, err := m.Acquire("BS", "27")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := c.pipeline
+
+	released := make(chan struct{})
+	go func() {
+		c.ReleaseAfter(100 * time.Millisecond)
+		close(released)
+	}()
+
+	select {
+	case <-released:
+		t.Fatal("expected delayed release to keep running briefly")
+	case <-time.After(20 * time.Millisecond):
+	}
+	if p.isStopped() {
+		t.Fatal("expected pipeline to stay running before release delay expires")
+	}
+
+	waitFor(t, time.Second, p.isStopped)
+	select {
+	case <-released:
+	case <-time.After(time.Second):
+		t.Fatal("release did not return after delay")
+	}
+}
+
 func TestModeSelectsCommandTemplate(t *testing.T) {
 	m := NewManager(testConfig())
 
