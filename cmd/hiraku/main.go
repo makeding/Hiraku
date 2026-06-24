@@ -1,7 +1,10 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"syscall"
@@ -15,21 +18,31 @@ func main() {
 		os.Exit(2)
 	}
 
-	done := make(chan struct{})
-	signals := make(chan os.Signal, 2)
-	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
-	go func() {
-		select {
-		case <-signals:
-			os.Exit(0)
-		case <-done:
-		}
-	}()
+	signalCtx, stopSignals := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stopSignals()
 
-	err := client.Run(os.Args[1], os.Args[2], os.Args[3], os.Args[4], os.Stdout)
-	close(done)
+	ctx, cancel := context.WithCancel(signalCtx)
+	defer cancel()
+
+	go cancelOnStdinData(os.Stdin, cancel)
+
+	err := client.Run(ctx, os.Args[1], os.Args[2], os.Args[3], os.Args[4], os.Stdout)
 	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			return
+		}
 		fmt.Fprintf(os.Stderr, "hiraku: %v\n", err)
 		os.Exit(1)
+	}
+}
+
+func cancelOnStdinData(r io.Reader, cancel context.CancelFunc) {
+	var buf [1]byte
+	n, err := r.Read(buf[:])
+	if n > 0 {
+		cancel()
+	}
+	if err != nil {
+		return
 	}
 }
