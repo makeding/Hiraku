@@ -1,0 +1,22 @@
+{
+  "listen": "0.0.0.0:40773",
+  "secret": "change-me",
+  "allowIPv4CidrRanges": [
+    "10.0.0.0/8",
+    "127.0.0.0/8",
+    "172.16.0.0/12",
+    "192.168.0.0/16"
+  ],
+  "modes": {
+    "BSCS": {
+      "record": [
+        ["recdvb", "--dev", "0", "--strip", "--b25", "<channel>", "-", "-"]
+      ]
+    },
+    "BS4K": {
+      "record": [
+        ["recdvb4k", "--dev", "0", "--acas", "<channel>", "-", "-"]
+      ]
+    }
+  }
+}
