@@ -19,11 +19,11 @@
     },
     "BSCS2": {
       "record": [
-        ["recdvb", "--dev", "0", "--strip", "--b25", "<channel>", "-", "-"]
+        ["recdvb", "--dev", "1", "--strip", "--b25", "<channel>", "-", "-"]
       ]
     },
     "BS4K2": {
-      "record": [["recdvb4k", "--dev", "0", "--b61", "<channel>", "-", "-"]]
+      "record": [["recdvb4k", "--dev", "1", "--b61", "<channel>", "-", "-"]]
     }
   }
 }
