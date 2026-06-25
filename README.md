@@ -40,5 +40,6 @@ Pipelines are arrays of argv arrays. They are executed without a shell, and stdo
 ## Lifecycle
 
 - Each client request starts its own pipeline from the selected mode template.
+- A mode can only have one active pipeline at a time. If the same mode is requested while it is already running, the agent rejects the request before starting local commands.
 - When the client disconnects, that pipeline is stopped after `disconnectCloseDelaySeconds`.
 - There is no shared decode session, fanout, idle handoff, or byte buffering.

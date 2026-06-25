@@ -18,7 +18,7 @@ func TestAcquireRejectsUnknownMode(t *testing.T) {
 	}
 }
 
-func TestEachAcquireStartsIndependentPipeline(t *testing.T) {
+func TestEachModeStartsIndependentPipeline(t *testing.T) {
 	m := NewManager(testConfig())
 
 	c1, err := m.Acquire("BS", "27")
@@ -27,20 +27,34 @@ func TestEachAcquireStartsIndependentPipeline(t *testing.T) {
 	}
 	defer c1.Release()
 
-	c2, err := m.Acquire("BS", "27")
+	c2, err := m.Acquire("S3", "27")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer c2.Release()
 
 	if c1.pipeline == c2.pipeline {
-		t.Fatal("expected each request to start its own pipeline")
+		t.Fatal("expected each mode to start its own pipeline")
 	}
 
 	chunk1 := waitChunk(t, c1)
 	chunk2 := waitChunk(t, c2)
 	if !bytes.Contains(chunk1, []byte("27")) || !bytes.Contains(chunk2, []byte("27")) {
 		t.Fatalf("unexpected chunks: %q %q", chunk1, chunk2)
+	}
+}
+
+func TestAcquireRejectsBusyMode(t *testing.T) {
+	m := NewManager(testConfig())
+
+	c, err := m.Acquire("BS", "27")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Release()
+
+	if _, err := m.Acquire("BS", "28"); err == nil {
+		t.Fatal("expected busy mode to be rejected")
 	}
 }
 

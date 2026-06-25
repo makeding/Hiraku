@@ -18,9 +18,10 @@ const defaultStopTimeout = 5 * time.Second
 type Manager struct {
 	cfg config.Config
 
-	mu        sync.Mutex
-	shutdown  bool
-	pipelines map[*Pipeline]struct{}
+	mu          sync.Mutex
+	shutdown    bool
+	pipelines   map[*Pipeline]struct{}
+	activeModes map[string]*Pipeline
 }
 
 type Consumer struct {
@@ -43,8 +44,9 @@ type Pipeline struct {
 
 func NewManager(cfg config.Config) *Manager {
 	return &Manager{
-		cfg:       cfg,
-		pipelines: make(map[*Pipeline]struct{}),
+		cfg:         cfg,
+		pipelines:   make(map[*Pipeline]struct{}),
+		activeModes: make(map[string]*Pipeline),
 	}
 }
 
@@ -66,15 +68,15 @@ func (m *Manager) Acquire(modeName string, channel string) (*Consumer, error) {
 	}
 	p := newPipeline(config.ExpandPipeline(mode, channel))
 	p.onDone = func() {
-		m.unregister(p)
+		m.unregister(modeName, p)
 	}
 
-	if err := m.register(p); err != nil {
+	if err := m.register(modeName, p); err != nil {
 		return nil, err
 	}
 	c.pipeline = p
 	if err := p.start(c.ch); err != nil {
-		m.unregister(p)
+		m.unregister(modeName, p)
 		return nil, err
 	}
 	return c, nil
@@ -104,20 +106,27 @@ func (m *Manager) Shutdown() {
 	wg.Wait()
 }
 
-func (m *Manager) register(p *Pipeline) error {
+func (m *Manager) register(modeName string, p *Pipeline) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.shutdown {
 		return errors.New("agent is shutting down")
 	}
+	if _, ok := m.activeModes[modeName]; ok {
+		return fmt.Errorf("mode is busy: %s", modeName)
+	}
 	m.pipelines[p] = struct{}{}
+	m.activeModes[modeName] = p
 	return nil
 }
 
-func (m *Manager) unregister(p *Pipeline) {
+func (m *Manager) unregister(modeName string, p *Pipeline) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	delete(m.pipelines, p)
+	if m.activeModes[modeName] == p {
+		delete(m.activeModes, modeName)
+	}
 }
 
 func (c *Consumer) CopyTo(w io.Writer) error {
