@@ -89,6 +89,31 @@ func TestReleaseAfterDelaysPipelineStop(t *testing.T) {
 	}
 }
 
+func TestManagerShutdownStopsActivePipelinesAndRejectsNewAcquire(t *testing.T) {
+	m := NewManager(testConfig())
+
+	c, err := m.Acquire("BS", "27")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := c.pipeline
+
+	m.Shutdown()
+
+	if !p.isStopped() {
+		t.Fatal("expected active pipeline to stop during shutdown")
+	}
+	select {
+	case <-p.done:
+	case <-time.After(time.Second):
+		t.Fatal("expected shutdown to wait for pipeline exit")
+	}
+
+	if _, err := m.Acquire("BS", "27"); err == nil {
+		t.Fatal("expected acquire after shutdown to fail")
+	}
+}
+
 func TestModeSelectsCommandTemplate(t *testing.T) {
 	m := NewManager(testConfig())
 

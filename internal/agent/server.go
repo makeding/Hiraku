@@ -2,6 +2,7 @@ package agent
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"io"
 	"log"
@@ -30,18 +31,27 @@ func NewServer(cfg config.Config, logger *log.Logger) *Server {
 	}
 }
 
-func (s *Server) ListenAndServe() error {
+func (s *Server) ListenAndServe(ctx context.Context) error {
 	ln, err := net.Listen("tcp", s.cfg.Listen)
 	if err != nil {
 		return err
 	}
 	defer ln.Close()
+	defer s.manager.Shutdown()
+
+	go func() {
+		<-ctx.Done()
+		_ = ln.Close()
+	}()
 
 	s.logger.Printf("listening on %s", s.cfg.Listen)
 
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
 			return err
 		}
 		go s.handle(conn)

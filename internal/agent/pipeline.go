@@ -7,13 +7,20 @@ import (
 	"os"
 	"os/exec"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/makeding/hiraku/internal/config"
 )
 
+const defaultStopTimeout = 5 * time.Second
+
 type Manager struct {
 	cfg config.Config
+
+	mu        sync.Mutex
+	shutdown  bool
+	pipelines map[*Pipeline]struct{}
 }
 
 type Consumer struct {
@@ -26,13 +33,19 @@ type Pipeline struct {
 	argvs    [][]string
 	commands []*exec.Cmd
 
-	mu      sync.Mutex
-	stopped bool
-	done    chan struct{}
+	mu       sync.Mutex
+	stopped  bool
+	done     chan struct{}
+	stopCh   chan struct{}
+	stopOnce sync.Once
+	onDone   func()
 }
 
 func NewManager(cfg config.Config) *Manager {
-	return &Manager{cfg: cfg}
+	return &Manager{
+		cfg:       cfg,
+		pipelines: make(map[*Pipeline]struct{}),
+	}
 }
 
 func (m *Manager) Acquire(modeName string, channel string) (*Consumer, error) {
@@ -52,11 +65,59 @@ func (m *Manager) Acquire(modeName string, channel string) (*Consumer, error) {
 		ch: make(chan []byte, 64),
 	}
 	p := newPipeline(config.ExpandPipeline(mode, channel))
+	p.onDone = func() {
+		m.unregister(p)
+	}
+
+	if err := m.register(p); err != nil {
+		return nil, err
+	}
 	c.pipeline = p
 	if err := p.start(c.ch); err != nil {
+		m.unregister(p)
 		return nil, err
 	}
 	return c, nil
+}
+
+func (m *Manager) Shutdown() {
+	m.mu.Lock()
+	if m.shutdown {
+		m.mu.Unlock()
+		return
+	}
+	m.shutdown = true
+	pipelines := make([]*Pipeline, 0, len(m.pipelines))
+	for p := range m.pipelines {
+		pipelines = append(pipelines, p)
+	}
+	m.mu.Unlock()
+
+	var wg sync.WaitGroup
+	for _, p := range pipelines {
+		wg.Add(1)
+		go func(p *Pipeline) {
+			defer wg.Done()
+			p.stopAndWait(defaultStopTimeout)
+		}(p)
+	}
+	wg.Wait()
+}
+
+func (m *Manager) register(p *Pipeline) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.shutdown {
+		return errors.New("agent is shutting down")
+	}
+	m.pipelines[p] = struct{}{}
+	return nil
+}
+
+func (m *Manager) unregister(p *Pipeline) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.pipelines, p)
 }
 
 func (c *Consumer) CopyTo(w io.Writer) error {
@@ -83,8 +144,9 @@ func (c *Consumer) ReleaseAfter(delay time.Duration) {
 
 func newPipeline(argvs [][]string) *Pipeline {
 	return &Pipeline{
-		argvs: argvs,
-		done:  make(chan struct{}),
+		argvs:  argvs,
+		done:   make(chan struct{}),
+		stopCh: make(chan struct{}),
 	}
 }
 
@@ -97,6 +159,7 @@ func (p *Pipeline) start(output chan<- []byte) error {
 	for i, argv := range p.argvs {
 		cmd := exec.Command(argv[0], argv[1:]...)
 		cmd.Stderr = os.Stderr
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 		if previousStdout != nil {
 			cmd.Stdin = previousStdout
@@ -109,11 +172,14 @@ func (p *Pipeline) start(output chan<- []byte) error {
 		}
 
 		if err := cmd.Start(); err != nil {
-			p.stop()
+			p.cleanupStartedCommands()
 			return err
 		}
 
-		p.commands = append(p.commands, cmd)
+		if err := p.addStartedCommand(cmd); err != nil {
+			p.cleanupStartedCommands()
+			return err
+		}
 		if i > 0 && previousStdout != nil {
 			previousStdout.Close()
 		}
@@ -126,6 +192,20 @@ func (p *Pipeline) start(output chan<- []byte) error {
 	return nil
 }
 
+func (p *Pipeline) addStartedCommand(cmd *exec.Cmd) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.stopped {
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+			_ = cmd.Wait()
+		}
+		return errors.New("pipeline stopped")
+	}
+	p.commands = append(p.commands, cmd)
+	return nil
+}
+
 func (p *Pipeline) copyOutput(r io.ReadCloser, output chan<- []byte) {
 	defer r.Close()
 	defer close(output)
@@ -134,7 +214,7 @@ func (p *Pipeline) copyOutput(r io.ReadCloser, output chan<- []byte) {
 	for {
 		n, err := r.Read(buf)
 		if n > 0 {
-			if !safeSend(output, append([]byte(nil), buf[:n]...)) {
+			if !safeSend(output, append([]byte(nil), buf[:n]...), p.stopCh) {
 				return
 			}
 		}
@@ -144,25 +224,53 @@ func (p *Pipeline) copyOutput(r io.ReadCloser, output chan<- []byte) {
 	}
 }
 
-func safeSend(ch chan<- []byte, chunk []byte) (ok bool) {
+func safeSend(ch chan<- []byte, chunk []byte, stopCh <-chan struct{}) (ok bool) {
 	defer func() {
 		if recover() != nil {
 			ok = false
 		}
 	}()
-	ch <- chunk
-	return true
+	select {
+	case ch <- chunk:
+		return true
+	case <-stopCh:
+		return false
+	}
 }
 
 func (p *Pipeline) wait() {
-	defer close(p.done)
+	defer func() {
+		p.closeStopCh()
+		if p.onDone != nil {
+			p.onDone()
+		}
+		close(p.done)
+	}()
 	for _, cmd := range p.commands {
 		_ = cmd.Wait()
 	}
-	p.stop()
 }
 
 func (p *Pipeline) stop() {
+	p.stopAndWait(defaultStopTimeout)
+}
+
+func (p *Pipeline) stopAndWait(timeout time.Duration) {
+	p.requestStop()
+
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
+	select {
+	case <-p.done:
+		return
+	case <-timer.C:
+		p.killCommands()
+		<-p.done
+	}
+}
+
+func (p *Pipeline) requestStop() {
 	p.mu.Lock()
 	if p.stopped {
 		p.mu.Unlock()
@@ -172,11 +280,49 @@ func (p *Pipeline) stop() {
 	commands := append([]*exec.Cmd(nil), p.commands...)
 	p.mu.Unlock()
 
+	p.closeStopCh()
 	for _, cmd := range commands {
-		if cmd.Process != nil {
-			_ = cmd.Process.Kill()
+		signalCommandGroup(cmd, syscall.SIGTERM)
+	}
+}
+
+func (p *Pipeline) closeStopCh() {
+	p.stopOnce.Do(func() {
+		close(p.stopCh)
+	})
+}
+
+func (p *Pipeline) killCommands() {
+	p.mu.Lock()
+	commands := append([]*exec.Cmd(nil), p.commands...)
+	p.mu.Unlock()
+
+	for _, cmd := range commands {
+		signalCommandGroup(cmd, syscall.SIGKILL)
+	}
+}
+
+func (p *Pipeline) cleanupStartedCommands() {
+	p.requestStop()
+	p.killCommands()
+	for _, cmd := range p.commands {
+		_ = cmd.Wait()
+	}
+	p.closeStopCh()
+	close(p.done)
+}
+
+func signalCommandGroup(cmd *exec.Cmd, sig syscall.Signal) {
+	if cmd.Process == nil {
+		return
+	}
+	pid := cmd.Process.Pid
+	if pid > 0 {
+		if err := syscall.Kill(-pid, sig); err == nil || errors.Is(err, syscall.ESRCH) {
+			return
 		}
 	}
+	_ = cmd.Process.Signal(sig)
 }
 
 func (p *Pipeline) isStopped() bool {
