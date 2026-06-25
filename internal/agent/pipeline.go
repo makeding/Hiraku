@@ -167,7 +167,7 @@ func (p *Pipeline) start(output chan<- []byte) error {
 
 		stdout, err := cmd.StdoutPipe()
 		if err != nil {
-			p.stop()
+			p.cleanupStartedCommands()
 			return err
 		}
 
@@ -197,7 +197,7 @@ func (p *Pipeline) addStartedCommand(cmd *exec.Cmd) error {
 	defer p.mu.Unlock()
 	if p.stopped {
 		if cmd.Process != nil {
-			_ = cmd.Process.Kill()
+			signalCommandGroup(cmd, syscall.SIGKILL)
 			_ = cmd.Wait()
 		}
 		return errors.New("pipeline stopped")
