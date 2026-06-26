@@ -1,6 +1,6 @@
 # Hiraku
 
-Japanese documentation: [README.ja.md](README.ja.md)
+Translations: [日本語](README.ja.md) | [简体中文](README.zh.md)
 
 Hiraku is a small relay agent for running selected tuner command templates on a remote machine and streaming the output back over TCP.
 

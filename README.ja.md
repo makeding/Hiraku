@@ -1,6 +1,6 @@
 # Hiraku
 
-English documentation: [README.md](README.md)
+Translations: [English](README.md) | [简体中文](README.zh.md)
 
 Hiraku は、Mirakurun から離れたマシン上のチューナーコマンドを TCP 経由で呼び出すための小さなリレーエージェントです。
 
