@@ -34,12 +34,13 @@ type Pipeline struct {
 	argvs    [][]string
 	commands []*exec.Cmd
 
-	mu       sync.Mutex
-	stopped  bool
-	done     chan struct{}
-	stopCh   chan struct{}
-	stopOnce sync.Once
-	onDone   func()
+	mu        sync.Mutex
+	stopped   bool
+	releasing bool
+	done      chan struct{}
+	stopCh    chan struct{}
+	stopOnce  sync.Once
+	onDone    func()
 }
 
 func NewManager(cfg config.Config) *Manager {
@@ -71,8 +72,15 @@ func (m *Manager) Acquire(modeName string, channel string) (*Consumer, error) {
 		m.unregister(modeName, p)
 	}
 
-	if err := m.register(modeName, p); err != nil {
-		return nil, err
+	for {
+		preempt, err := m.register(modeName, p)
+		if err != nil {
+			return nil, err
+		}
+		if preempt == nil {
+			break
+		}
+		preempt.stopAndWait(defaultStopTimeout)
 	}
 	c.pipeline = p
 	if err := p.start(c.ch); err != nil {
@@ -106,18 +114,21 @@ func (m *Manager) Shutdown() {
 	wg.Wait()
 }
 
-func (m *Manager) register(modeName string, p *Pipeline) error {
+func (m *Manager) register(modeName string, p *Pipeline) (*Pipeline, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.shutdown {
-		return errors.New("agent is shutting down")
+		return nil, errors.New("agent is shutting down")
 	}
-	if _, ok := m.activeModes[modeName]; ok {
-		return fmt.Errorf("mode is busy: %s", modeName)
+	if existing, ok := m.activeModes[modeName]; ok {
+		if existing.isReleasingOrStopped() {
+			return existing, nil
+		}
+		return nil, fmt.Errorf("mode is busy: %s", modeName)
 	}
 	m.pipelines[p] = struct{}{}
 	m.activeModes[modeName] = p
-	return nil
+	return nil, nil
 }
 
 func (m *Manager) unregister(modeName string, p *Pipeline) {
@@ -144,8 +155,20 @@ func (c *Consumer) Release() {
 
 func (c *Consumer) ReleaseAfter(delay time.Duration) {
 	c.once.Do(func() {
+		c.pipeline.markReleasing()
 		if delay > 0 {
-			time.Sleep(delay)
+			timer := time.NewTimer(delay)
+			select {
+			case <-timer.C:
+			case <-c.pipeline.done:
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
+				return
+			}
 		}
 		c.pipeline.stop()
 	})
@@ -295,6 +318,12 @@ func (p *Pipeline) requestStop() {
 	}
 }
 
+func (p *Pipeline) markReleasing() {
+	p.mu.Lock()
+	p.releasing = true
+	p.mu.Unlock()
+}
+
 func (p *Pipeline) closeStopCh() {
 	p.stopOnce.Do(func() {
 		close(p.stopCh)
@@ -338,4 +367,10 @@ func (p *Pipeline) isStopped() bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.stopped
+}
+
+func (p *Pipeline) isReleasingOrStopped() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.releasing || p.stopped
 }

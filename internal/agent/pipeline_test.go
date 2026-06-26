@@ -103,6 +103,43 @@ func TestReleaseAfterDelaysPipelineStop(t *testing.T) {
 	}
 }
 
+func TestAcquirePreemptsDelayedRelease(t *testing.T) {
+	m := NewManager(testConfig())
+
+	c, err := m.Acquire("BS", "27")
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldPipeline := c.pipeline
+
+	released := make(chan struct{})
+	go func() {
+		c.ReleaseAfter(500 * time.Millisecond)
+		close(released)
+	}()
+	waitFor(t, time.Second, oldPipeline.isReleasingOrStopped)
+
+	start := time.Now()
+	next, err := m.Acquire("BS", "28")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer next.Release()
+	if time.Since(start) >= 500*time.Millisecond {
+		t.Fatal("expected acquire to preempt delayed release instead of waiting for delay")
+	}
+	if next.pipeline == oldPipeline {
+		t.Fatal("expected a new pipeline after preempting delayed release")
+	}
+
+	waitFor(t, time.Second, oldPipeline.isStopped)
+	select {
+	case <-released:
+	case <-time.After(time.Second):
+		t.Fatal("delayed release did not return after preemption")
+	}
+}
+
 func TestManagerShutdownStopsActivePipelinesAndRejectsNewAcquire(t *testing.T) {
 	m := NewManager(testConfig())
 

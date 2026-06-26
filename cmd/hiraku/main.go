@@ -39,10 +39,7 @@ func main() {
 func cancelOnStdinData(r io.Reader, cancel context.CancelFunc) {
 	var buf [1]byte
 	n, err := r.Read(buf[:])
-	if n > 0 {
+	if n > 0 || errors.Is(err, io.EOF) {
 		cancel()
-	}
-	if err != nil {
-		return
 	}
 }
