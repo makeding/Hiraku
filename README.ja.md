@@ -41,6 +41,10 @@ commandBS4K: hiraku 192.168.1.102:40773 change-me BS4K1 <channel>
 commandBS4K: hiraku 192.168.1.102:40773 change-me BS4K1-M2TS <channel>
 ```
 
+## セキュリティ
+
+本プロジェクトは信頼できるプライベートネットワーク内でのみ使用してください。通信は暗号化されないため、公開インターネットに公開しないでください。
+
 ## hirakud の設定
 
 設定例は `examples/pt4k-config.json` を参照してください。

@@ -41,6 +41,10 @@ To use a mode that converts the stream with `hantto4k`, point `commandBS4K` at t
 commandBS4K: hiraku 192.168.1.102:40773 change-me BS4K1-M2TS <channel>
 ```
 
+## Security
+
+Use this project only on a trusted private network. Traffic is not encrypted; do not expose it to the public internet.
+
 ## hirakud Config
 
 See `examples/pt4k-config.json` for a full example.
