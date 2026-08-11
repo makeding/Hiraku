@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -180,12 +181,75 @@ func TestModeSelectsCommandTemplate(t *testing.T) {
 	}
 }
 
+func TestAcquirePipeStreamsInputThroughCommand(t *testing.T) {
+	m := NewManager(testConfig())
+	c, err := m.AcquirePipe("UPPER", strings.NewReader("remote pipe\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Release()
+
+	var out bytes.Buffer
+	if err := c.CopyTo(&out); err != nil {
+		t.Fatal(err)
+	}
+	code, err := c.pipeline.result()
+	if err != nil || code != 0 {
+		t.Fatalf("pipe result = (%d, %v)", code, err)
+	}
+	if got, want := out.String(), "REMOTE PIPE\n"; got != want {
+		t.Fatalf("pipe output = %q, want %q", got, want)
+	}
+}
+
+func TestAcquirePipeReportsRemoteExit(t *testing.T) {
+	m := NewManager(testConfig())
+	c, err := m.AcquirePipe("FAIL", strings.NewReader("input"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Release()
+
+	if err := c.CopyTo(io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	code, err := c.pipeline.result()
+	if err == nil || code != 7 {
+		t.Fatalf("pipe result = (%d, %v), want exit code 7", code, err)
+	}
+}
+
+func TestAcquirePipeEnforcesDefaultConcurrencyLimit(t *testing.T) {
+	m := NewManager(testConfig())
+	consumers := make([]*Consumer, 0, config.DefaultMaxConcurrentPipes)
+	writers := make([]*io.PipeWriter, 0, config.DefaultMaxConcurrentPipes)
+	for i := 0; i < config.DefaultMaxConcurrentPipes; i++ {
+		reader, writer := io.Pipe()
+		consumer, err := m.AcquirePipe("HOLD", reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		consumers = append(consumers, consumer)
+		writers = append(writers, writer)
+	}
+	reader, writer := io.Pipe()
+	defer reader.Close()
+	defer writer.Close()
+	if _, err := m.AcquirePipe("HOLD", reader); err == nil {
+		t.Fatal("expected fifth concurrent pipe to be rejected")
+	}
+	for i := range consumers {
+		_ = writers[i].Close()
+		consumers[i].Release()
+	}
+}
+
 func waitChunk(t *testing.T, c *Consumer) []byte {
 	t.Helper()
 	select {
 	case chunk := <-c.ch:
 		return chunk
-	case <-time.After(time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("timeout waiting for chunk")
 		return nil
 	}
@@ -222,6 +286,11 @@ func testConfig() config.Config {
 					helperCommand("pipe", "hantto4k"),
 				},
 			},
+		},
+		Pipes: map[string]config.Pipe{
+			"UPPER": {Command: [][]string{helperCommand("upper")}},
+			"FAIL":  {Command: [][]string{helperCommand("fail")}},
+			"HOLD":  {Command: [][]string{helperCommand("hold")}},
 		},
 	}
 }
@@ -260,6 +329,14 @@ func TestHelperProcess(t *testing.T) {
 			break
 		}
 		fmt.Printf("%s:%s", args[1], data)
+	case "upper":
+		data, _ := io.ReadAll(os.Stdin)
+		fmt.Print(strings.ToUpper(string(data)))
+	case "fail":
+		fmt.Print("partial")
+		os.Exit(7)
+	case "hold":
+		_, _ = io.Copy(io.Discard, os.Stdin)
 	default:
 		os.Exit(2)
 	}

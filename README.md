@@ -75,13 +75,37 @@ See `examples/pt4k-config.json` for a full example.
 }
 ```
 
-The client can only request `mode` and `channel`. `mode` is the identity of a local command template under `modes.*.record`; `hirakud` only expands `<channel>` inside that template. The Mirakurun host cannot send arbitrary shell commands.
+Tuner requests can only specify `mode` and `channel`. `mode` identifies a local command template under `modes.*.record`, and `hirakud` only expands `<channel>` inside that template. Pipe requests likewise select only a preconfigured name under `pipes`. Clients cannot send arbitrary shell commands.
 
 `allowIPv4CidrRanges` restricts client source addresses before request authentication. When omitted, it defaults to LAN-oriented IPv4 ranges similar to Mirakurun: `10.0.0.0/8`, `127.0.0.0/8`, `172.16.0.0/12`, and `192.168.0.0/16`.
 
 `disconnectCloseDelaySeconds` is the grace period before stopping the local recording command after the client TCP connection ends. When omitted, it defaults to `0`, which stops the command immediately after disconnect.
 
 Pipelines are arrays of argv arrays. They are executed without a shell, and stdout of each step is piped to stdin of the next step.
+
+## Remote pipe
+
+`hiraku pipe` can replace the local FFmpeg process launched by `tsreplace` through `-e`. It sends the stdin produced by `tsreplace` to a preconfigured remote FFmpeg and returns remote stdout to `tsreplace`. See `examples/ffmpeg-pipe-config.json` for the complete configuration.
+
+```sh
+tsreplace.exe -i input.ts -o output.ts -e hiraku.exe pipe 127.0.0.1:40773 change-me FFMPEG-X265
+```
+
+Remote pipes use a separate `pipes` section:
+
+```json
+{
+  "pipes": {
+    "FFMPEG-X265": {
+      "command": [["ffmpeg", "-y", "-f", "mpegts", "-i", "-", "-copyts", "-start_at_zero", "-vf", "yadif", "-an", "-c:v", "libx265", "-preset", "medium", "-crf", "23", "-g", "90", "-f", "mpegts", "-"]]
+    }
+  }
+}
+```
+
+After stdin reaches EOF, the client closes only the TCP upload direction and continues receiving the remaining flushed output. A non-zero remote pipeline status becomes the `hiraku` exit status. FFmpeg arguments come only from the local `hirakud` configuration; clients can select a pipe name but cannot submit commands or arguments.
+
+`maxConcurrentPipes` limits the total number of pipe tasks running in one `hirakud`. It defaults to `4` when omitted. New requests are rejected as busy immediately when the limit is reached; they are not queued.
 
 ## systemd
 
@@ -100,5 +124,6 @@ sudo systemctl enable --now hirakud.service
 
 - Each client request starts a new pipeline from the selected mode template.
 - A mode can only have one active pipeline at a time. If the same mode is requested while it is already running, the agent rejects the request before starting local commands.
+- Each pipe request also starts an independent pipeline; requests for the same pipe can run concurrently up to the global `maxConcurrentPipes` limit.
 - When the client disconnects, that pipeline is stopped after `disconnectCloseDelaySeconds`.
 - There is no shared decode session, fanout, idle handoff, or byte buffering.

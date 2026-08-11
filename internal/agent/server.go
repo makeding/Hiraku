@@ -77,6 +77,14 @@ func (s *Server) handle(conn net.Conn) {
 		s.writeError(conn, errors.New("authentication failed"))
 		return
 	}
+	if (req.Pipe == "") == (req.Mode == "") {
+		s.writeError(conn, errors.New("request must select exactly one mode or pipe"))
+		return
+	}
+	if req.Pipe != "" {
+		s.handlePipe(conn, br, req.Pipe)
+		return
+	}
 
 	consumer, err := s.manager.Acquire(req.Mode, req.Channel)
 	if err != nil {
@@ -91,6 +99,30 @@ func (s *Server) handle(conn net.Conn) {
 
 	_ = consumer.CopyTo(conn)
 	consumer.ReleaseAfter(time.Duration(s.cfg.DisconnectCloseDelaySeconds) * time.Second)
+}
+
+func (s *Server) handlePipe(conn net.Conn, input io.Reader, pipeName string) {
+	consumer, err := s.manager.AcquirePipe(pipeName, input)
+	if err != nil {
+		s.writeError(conn, err)
+		return
+	}
+	defer consumer.Release()
+
+	if err := protocol.WriteResponse(conn, protocol.Response{OK: true}); err != nil {
+		return
+	}
+	for chunk := range consumer.ch {
+		if err := protocol.WriteFrame(conn, protocol.FrameStdout, chunk); err != nil {
+			return
+		}
+	}
+	code, err := consumer.pipeline.result()
+	exit := protocol.PipeExit{Code: code}
+	if err != nil {
+		exit.Error = err.Error()
+	}
+	_ = protocol.WritePipeExit(conn, exit)
 }
 
 func (s *Server) writeError(w io.Writer, err error) {

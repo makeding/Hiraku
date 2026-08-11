@@ -60,6 +60,47 @@ func TestLoadDefaultsAllowIPv4CidrRanges(t *testing.T) {
 	}
 }
 
+func TestLoadPipeOnlyConfig(t *testing.T) {
+	cfg, err := loadConfigJSON(t, `{
+		"secret": "secret",
+		"pipes": {
+			"FFMPEG-REMUX": {
+				"command": [["ffmpeg", "-i", "pipe:0", "-f", "mpegts", "pipe:1"]]
+			}
+		}
+	}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.Pipes["FFMPEG-REMUX"].Command[0][0]; got != "ffmpeg" {
+		t.Fatalf("unexpected pipe command: %q", got)
+	}
+	if cfg.MaxConcurrentPipes != DefaultMaxConcurrentPipes {
+		t.Fatalf("maxConcurrentPipes = %d, want %d", cfg.MaxConcurrentPipes, DefaultMaxConcurrentPipes)
+	}
+}
+
+func TestLoadRejectsEmptyPipeCommand(t *testing.T) {
+	_, err := loadConfigJSON(t, `{
+		"secret": "secret",
+		"pipes": {"EMPTY": {"command": []}}
+	}`)
+	if err == nil {
+		t.Fatal("expected empty pipe command to be rejected")
+	}
+}
+
+func TestLoadRejectsNegativeMaxConcurrentPipes(t *testing.T) {
+	_, err := loadConfigJSON(t, `{
+		"secret": "secret",
+		"maxConcurrentPipes": -1,
+		"pipes": {"PIPE": {"command": [["command"]]}}
+	}`)
+	if err == nil {
+		t.Fatal("expected negative maxConcurrentPipes to be rejected")
+	}
+}
+
 func TestLoadRejectsInvalidAllowIPv4CidrRanges(t *testing.T) {
 	invalidRanges := []string{"fc00::/7", "192.168.0.1", "not-a-cidr"}
 	for _, cidr := range invalidRanges {

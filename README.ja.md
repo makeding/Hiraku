@@ -75,13 +75,37 @@ commandBS4K: hiraku 192.168.1.102:40773 change-me BS4K1-M2TS <channel>
 }
 ```
 
-クライアントが指定できるのは `mode` と `channel` だけです。`mode` は `modes.*.record` にあるローカルコマンドテンプレートの識別子で、`hirakud` はそのテンプレート内の `<channel>` だけを置換します。Mirakurun ホストから任意のシェルコマンドを送ることはできません。
+チューナーリクエストで指定できるのは `mode` と `channel` だけです。`mode` は `modes.*.record` にあるローカルコマンドテンプレートの識別子で、`hirakud` はそのテンプレート内の `<channel>` だけを置換します。pipe リクエストも `pipes` に事前設定された名前だけを選択します。クライアントから任意のシェルコマンドを送ることはできません。
 
 `allowIPv4CidrRanges` は、リクエスト認証より前にクライアントの接続元 IPv4 アドレスを制限します。省略時は Mirakurun と同じような LAN 向けの許可リストとして、`10.0.0.0/8`、`127.0.0.0/8`、`172.16.0.0/12`、`192.168.0.0/16` が使われます。
 
 `disconnectCloseDelaySeconds` は、クライアントの TCP 接続が切れたあと、ローカルの録画コマンドを停止するまでの猶予秒数です。省略時は `0` で、切断後すぐに停止します。
 
 パイプラインは argv 配列の配列です。シェルは使わず、各ステップの stdout が次のステップの stdin に接続されます。
+
+## リモート pipe
+
+`hiraku pipe` は、`tsreplace` が `-e` で起動するローカル FFmpeg の代わりに使用できます。`tsreplace` の stdin を事前設定済みのリモート FFmpeg に送り、リモート stdout を `tsreplace` に返します。完全な設定例は `examples/ffmpeg-pipe-config.json` を参照してください。
+
+```sh
+tsreplace.exe -i input.ts -o output.ts -e hiraku.exe pipe 127.0.0.1:40773 change-me FFMPEG-X265
+```
+
+リモート pipe は独立した `pipes` セクションで設定します。
+
+```json
+{
+  "pipes": {
+    "FFMPEG-X265": {
+      "command": [["ffmpeg", "-y", "-f", "mpegts", "-i", "-", "-copyts", "-start_at_zero", "-vf", "yadif", "-an", "-c:v", "libx265", "-preset", "medium", "-crf", "23", "-g", "90", "-f", "mpegts", "-"]]
+    }
+  }
+}
+```
+
+stdin が EOF になった後、クライアントは TCP の送信方向だけを閉じ、FFmpeg がフラッシュする残りの出力を受信し続けます。リモート pipeline が非ゼロで終了すると `hiraku` も同じ終了状態になります。FFmpeg の引数は `hirakud` のローカル設定だけで定義され、クライアントは pipe 名を選べますが任意のコマンドや引数は送信できません。
+
+`maxConcurrentPipes` は、1 つの `hirakud` で同時実行できる pipe タスクの総数を制限します。省略時の既定値は `4` です。上限に達した場合、新しいリクエストは待機せず、直ちに busy として拒否されます。
 
 ## systemd
 
@@ -100,5 +124,6 @@ sudo systemctl enable --now hirakud.service
 
 - クライアントからの各リクエストごとに、選択された mode のパイプラインを新しく起動します。
 - 同じ mode は同時に 1 つのパイプラインだけを実行できます。すでに実行中の mode が要求された場合、ローカルコマンドを起動する前に拒否します。
+- pipe リクエストごとにも独立した pipeline を起動し、同じ pipe 名のリクエストもグローバルな `maxConcurrentPipes` 上限まで並行実行できます。
 - クライアントが切断されると、そのパイプラインは `disconnectCloseDelaySeconds` の後に停止されます。
 - 共有デコードセッション、fanout、idle handoff、バイトバッファリングはありません。

@@ -22,6 +22,8 @@ type Manager struct {
 	shutdown    bool
 	pipelines   map[*Pipeline]struct{}
 	activeModes map[string]*Pipeline
+	activePipes int
+	maxPipes    int
 }
 
 type Consumer struct {
@@ -33,21 +35,29 @@ type Consumer struct {
 type Pipeline struct {
 	argvs    [][]string
 	commands []*exec.Cmd
+	input    io.Reader
 
-	mu        sync.Mutex
-	stopped   bool
-	releasing bool
-	done      chan struct{}
-	stopCh    chan struct{}
-	stopOnce  sync.Once
-	onDone    func()
+	mu         sync.Mutex
+	stopped    bool
+	releasing  bool
+	waitErr    error
+	done       chan struct{}
+	outputDone chan struct{}
+	stopCh     chan struct{}
+	stopOnce   sync.Once
+	onDone     func()
 }
 
 func NewManager(cfg config.Config) *Manager {
+	maxPipes := cfg.MaxConcurrentPipes
+	if maxPipes == 0 {
+		maxPipes = config.DefaultMaxConcurrentPipes
+	}
 	return &Manager{
 		cfg:         cfg,
 		pipelines:   make(map[*Pipeline]struct{}),
 		activeModes: make(map[string]*Pipeline),
+		maxPipes:    maxPipes,
 	}
 }
 
@@ -85,6 +95,34 @@ func (m *Manager) Acquire(modeName string, channel string) (*Consumer, error) {
 	c.pipeline = p
 	if err := p.start(c.ch); err != nil {
 		m.unregister(modeName, p)
+		return nil, err
+	}
+	return c, nil
+}
+
+func (m *Manager) AcquirePipe(pipeName string, input io.Reader) (*Consumer, error) {
+	if err := config.ValidatePipeName(pipeName); err != nil {
+		return nil, err
+	}
+
+	pipe, ok := m.cfg.Pipes[pipeName]
+	if !ok {
+		return nil, fmt.Errorf("pipe is not configured: %s", pipeName)
+	}
+
+	c := &Consumer{ch: make(chan []byte, 64)}
+	p := newPipeline(pipe.Command)
+	p.input = input
+	p.onDone = func() {
+		m.unregisterPipe(p)
+	}
+
+	if err := m.registerPipe(p); err != nil {
+		return nil, err
+	}
+	c.pipeline = p
+	if err := p.start(c.ch); err != nil {
+		m.unregisterPipe(p)
 		return nil, err
 	}
 	return c, nil
@@ -140,6 +178,30 @@ func (m *Manager) unregister(modeName string, p *Pipeline) {
 	}
 }
 
+func (m *Manager) registerPipe(p *Pipeline) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.shutdown {
+		return errors.New("agent is shutting down")
+	}
+	if m.activePipes >= m.maxPipes {
+		return fmt.Errorf("pipe capacity is busy: %d active", m.activePipes)
+	}
+	m.pipelines[p] = struct{}{}
+	m.activePipes++
+	return nil
+}
+
+func (m *Manager) unregisterPipe(p *Pipeline) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.pipelines[p]; !ok {
+		return
+	}
+	delete(m.pipelines, p)
+	m.activePipes--
+}
+
 func (c *Consumer) CopyTo(w io.Writer) error {
 	for chunk := range c.ch {
 		if _, err := w.Write(chunk); err != nil {
@@ -176,9 +238,10 @@ func (c *Consumer) ReleaseAfter(delay time.Duration) {
 
 func newPipeline(argvs [][]string) *Pipeline {
 	return &Pipeline{
-		argvs:  argvs,
-		done:   make(chan struct{}),
-		stopCh: make(chan struct{}),
+		argvs:      argvs,
+		done:       make(chan struct{}),
+		outputDone: make(chan struct{}),
+		stopCh:     make(chan struct{}),
 	}
 }
 
@@ -195,6 +258,8 @@ func (p *Pipeline) start(output chan<- []byte) error {
 
 		if previousStdout != nil {
 			cmd.Stdin = previousStdout
+		} else if i == 0 && p.input != nil {
+			cmd.Stdin = p.input
 		}
 
 		stdout, err := cmd.StdoutPipe()
@@ -241,6 +306,7 @@ func (p *Pipeline) addStartedCommand(cmd *exec.Cmd) error {
 func (p *Pipeline) copyOutput(r io.ReadCloser, output chan<- []byte) {
 	defer r.Close()
 	defer close(output)
+	defer close(p.outputDone)
 
 	buf := make([]byte, 32*1024)
 	for {
@@ -278,9 +344,30 @@ func (p *Pipeline) wait() {
 		}
 		close(p.done)
 	}()
-	for _, cmd := range p.commands {
-		_ = cmd.Wait()
+	for i, cmd := range p.commands {
+		if err := cmd.Wait(); err != nil {
+			p.mu.Lock()
+			if p.waitErr == nil {
+				p.waitErr = fmt.Errorf("pipeline step %d: %w", i, err)
+			}
+			p.mu.Unlock()
+		}
 	}
+	<-p.outputDone
+}
+
+func (p *Pipeline) result() (int, error) {
+	<-p.done
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.waitErr == nil {
+		return 0, nil
+	}
+	var exitErr *exec.ExitError
+	if errors.As(p.waitErr, &exitErr) && exitErr.ExitCode() > 0 {
+		return exitErr.ExitCode(), p.waitErr
+	}
+	return 1, p.waitErr
 }
 
 func (p *Pipeline) stop() {
