@@ -106,8 +106,12 @@ func RunPipe(ctx context.Context, addr string, secret string, pipeName string, i
 		}
 		switch frameType {
 		case protocol.FrameStdout:
-			if _, err := out.Write(payload); err != nil {
+			n, err := out.Write(payload)
+			if err != nil {
 				return err
+			}
+			if n != len(payload) {
+				return io.ErrShortWrite
 			}
 		case protocol.FrameExit:
 			exit, err := protocol.ParsePipeExit(payload)

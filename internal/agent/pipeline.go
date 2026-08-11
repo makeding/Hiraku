@@ -204,8 +204,12 @@ func (m *Manager) unregisterPipe(p *Pipeline) {
 
 func (c *Consumer) CopyTo(w io.Writer) error {
 	for chunk := range c.ch {
-		if _, err := w.Write(chunk); err != nil {
+		n, err := w.Write(chunk)
+		if err != nil {
 			return err
+		}
+		if n != len(chunk) {
+			return io.ErrShortWrite
 		}
 	}
 	return nil
