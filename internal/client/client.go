@@ -11,6 +11,8 @@ import (
 	"github.com/makeding/hiraku/internal/protocol"
 )
 
+var ErrUnexpectedStreamEnd = errors.New("remote stream closed unexpectedly")
+
 type RemoteExitError struct {
 	Code    int
 	Message string
@@ -52,10 +54,13 @@ func Run(ctx context.Context, addr string, secret string, mode string, channel s
 	}
 
 	_, err = io.Copy(out, br)
-	if err != nil && ctx.Err() != nil {
+	if ctx.Err() != nil {
 		return ctx.Err()
 	}
-	return err
+	if err != nil {
+		return err
+	}
+	return ErrUnexpectedStreamEnd
 }
 
 func RunPipe(ctx context.Context, addr string, secret string, pipeName string, in io.Reader, out io.Writer) error {

@@ -73,3 +73,41 @@ func TestRunCancellationClosesConnection(t *testing.T) {
 		t.Fatal("server did not observe client disconnect")
 	}
 }
+
+func TestRunReturnsErrorWhenRemoteStreamEnds(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+
+	serverDone := make(chan struct{})
+	go func() {
+		defer close(serverDone)
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+
+		br := bufio.NewReader(conn)
+		if _, err := protocol.ReadRequest(br); err != nil {
+			t.Errorf("ReadRequest() error = %v", err)
+			return
+		}
+		if err := protocol.WriteResponse(conn, protocol.Response{OK: true}); err != nil {
+			t.Errorf("WriteResponse() error = %v", err)
+		}
+	}()
+
+	err = Run(context.Background(), ln.Addr().String(), "secret", "BS", "BS15_1", io.Discard)
+	if !errors.Is(err, ErrUnexpectedStreamEnd) {
+		t.Fatalf("Run() error = %v, want ErrUnexpectedStreamEnd", err)
+	}
+
+	select {
+	case <-serverDone:
+	case <-time.After(time.Second):
+		t.Fatal("server did not finish")
+	}
+}
